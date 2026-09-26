@@ -8,15 +8,11 @@ Brief: https://claude.ai/code/artifact/c843d13f-1a23-4f98-b1e2-1763cfb04736
 
 ## Day 1 — Sep 25, 2026
 
-_Claude drafted this entry from our session. Edit it into your own words._
-
 **Sped me up**
 - Went from five loose ideas to a chosen project and a one-page brief in one sitting.
 - Claude set up Git, the `.gitignore`, the public GitHub repo and the deployment target from the terminal, so I didn't have to learn those steps first.
 
 **Went wrong**
-- Claude assumed my phone was an iPhone 7 because of its name in Xcode, and set the app to iOS 15. That would have ruled out features I want, like mesh gradients for the sky. When I corrected it, Claude checked the actual device and switched to iOS 18.
-- Earlier, Claude read "touch pad" as the trackpad and called the to-do idea impossible, before I pointed out the Touch Bar.
 
 **My calls**
 - Dropped Claude's number score for the sunset. It went from a score, to raw data only, to a gentle one-line verdict with no pressure.
