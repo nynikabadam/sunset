@@ -24,3 +24,10 @@ Brief: https://claude.ai/code/artifact/c843d13f-1a23-4f98-b1e2-1763cfb04736
 
 **Steering Claude**
 - Commented directly in the brief to cut or change sections instead of rewriting them myself.
+
+## Day 2 — Sep 27, 2026
+
+**What made for an effective workflow**
+- It's easier to get the development, coding and basic structure of everything out of the way first, using super basic generated screens so I have something to point at and tweak.
+- Doing this first gets the whole foundation and skeleton of the app done. Then I can spend the time and energy the designs need, the part that gives the app its soul, without worrying about much else except UI implementation.
+- Screens are already defined, so there's no question mark about what to make next. I've already decided what I need to make.
