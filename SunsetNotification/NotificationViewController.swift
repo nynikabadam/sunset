@@ -11,10 +11,6 @@ import SwiftUI
 import UIKit
 import UserNotifications
 import UserNotificationsUI
-import os
-
-/// Filter Console.app by "sunsetnotif" to see these.
-private let log = Logger(subsystem: "badam.sunset.sunsetnotif", category: "sunsetnotif")
 
 /// A fixed Objective-C name, so iOS finds this class from the extension's Info.plist
 /// (NSExtensionPrincipalClass) without depending on the module name.
@@ -24,7 +20,6 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        log.notice("sunsetnotif: viewDidLoad, bounds \(self.view.bounds.debugDescription, privacy: .public)")
         preferredContentSize = CGSize(width: view.bounds.width, height: 240)
 
         // Shown right away, pinned to the edges, so there's never a blank box.
@@ -43,7 +38,6 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
 
     func didReceive(_ notification: UNNotification) {
         let info = notification.request.content.userInfo
-        log.notice("sunsetnotif: didReceive, userInfo \(String(describing: info), privacy: .public)")
         let place = NotificationPreview.Place(
             latitude: Self.number(info["latitude"]),
             longitude: Self.number(info["longitude"]),
