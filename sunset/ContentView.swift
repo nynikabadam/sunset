@@ -49,7 +49,8 @@ struct ContentView: View {
             message("No sunset here", detail: "The sun doesn't set here today or tomorrow.")
         case .loaded(let report, let forecastFailed):
             ScrollView {
-                SunsetDetails(report: report, heading: location.heading, forecastFailed: forecastFailed)
+                SunsetDetails(report: report, placeName: location.placeName,
+                              heading: location.heading, forecastFailed: forecastFailed)
             }
             .refreshable { await refresh() }
         }
@@ -92,13 +93,25 @@ struct ContentView: View {
 
 private struct SunsetDetails: View {
     let report: SunsetReport
+    let placeName: String?
     let heading: Double?
     let forecastFailed: Bool
 
     private var timeline: SunsetTimeline { report.timeline }
 
+    /// "Sat, Sep 27 · Chicago, IL": which day and place the forecast is for.
+    private var dateAndPlace: String {
+        let date = timeline.sunset.formatted(
+            Date.FormatStyle(timeZone: report.timeZone).weekday(.abbreviated).month(.abbreviated).day())
+        return [date, placeName ?? "Finding city…"].joined(separator: " · ")
+    }
+
     var body: some View {
         VStack(spacing: 28) {
+            Text(dateAndPlace)
+                .font(.subheadline.weight(.medium))
+                .opacity(0.8)
+
             VStack(spacing: 8) {
                 Text(report.verdict.headline)
                     .font(.title2.bold())

@@ -17,6 +17,8 @@ final class LocationManager: NSObject, CLLocationManagerDelegate {
 
     private(set) var status: Status = .notAsked
     private(set) var coordinate: CLLocationCoordinate2D?
+    /// A readable place name for the coordinate, e.g. "Chicago, IL". Nil until looked up.
+    private(set) var placeName: String?
     /// Which way the top of the phone points, degrees from true north. Nil when there's no compass (e.g. the Simulator).
     private(set) var heading: Double?
 
@@ -73,7 +75,17 @@ final class LocationManager: NSObject, CLLocationManagerDelegate {
         MainActor.assumeIsolated {
             coordinate = latest
             status = .located
+            Task { await lookUpPlaceName(for: latest) }
         }
+    }
+
+    private func lookUpPlaceName(for coordinate: CLLocationCoordinate2D) async {
+        let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        guard let place = try? await CLGeocoder().reverseGeocodeLocation(location).first else { return }
+        // "Chicago, IL" in the US; "London, United Kingdom" elsewhere.
+        let city = place.locality ?? place.subAdministrativeArea
+        let region = place.isoCountryCode == "US" ? place.administrativeArea : place.country
+        placeName = [city, region].compactMap { $0 }.joined(separator: ", ")
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
