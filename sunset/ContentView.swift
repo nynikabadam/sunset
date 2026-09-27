@@ -2,7 +2,7 @@
 //  ContentView.swift
 //  sunset
 //
-//  Day 1 test screen: today's sunset time and direction from your location.
+//  Test screen: tonight's verdict, sunset time, direction and sky conditions.
 //  Placeholder layout; the real design comes from Figma.
 //
 
@@ -11,6 +11,8 @@ import CoreLocation
 
 struct ContentView: View {
     @State private var location = LocationManager()
+    @State private var forecast = ForecastModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
@@ -28,11 +30,39 @@ struct ContentView: View {
             case .locating:
                 ProgressView("Finding you…").tint(.white).foregroundStyle(.white)
             case .located:
-                if let coordinate = location.coordinate {
-                    SunsetDetails(coordinate: coordinate, heading: location.heading)
-                }
+                forecastView
             }
         }
+        // Reload when the location arrives, and whenever the app comes back to the foreground.
+        .task(id: coordinateKey) { await refresh() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await refresh() } }
+        }
+    }
+
+    @ViewBuilder
+    private var forecastView: some View {
+        switch forecast.state {
+        case .idle, .loading:
+            ProgressView("Checking the sky…").tint(.white).foregroundStyle(.white)
+        case .noSunset:
+            message("No sunset here", detail: "The sun doesn't set here today or tomorrow.")
+        case .loaded(let report, let forecastFailed):
+            ScrollView {
+                SunsetDetails(report: report, heading: location.heading, forecastFailed: forecastFailed)
+            }
+            .refreshable { await refresh() }
+        }
+    }
+
+    private var coordinateKey: String {
+        guard let c = location.coordinate else { return "none" }
+        return String(format: "%.3f,%.3f", c.latitude, c.longitude)
+    }
+
+    private func refresh() async {
+        guard let c = location.coordinate else { return }
+        await forecast.load(latitude: c.latitude, longitude: c.longitude)
     }
 
     private var askForLocation: some View {
@@ -61,56 +91,91 @@ struct ContentView: View {
 }
 
 private struct SunsetDetails: View {
-    let coordinate: CLLocationCoordinate2D
+    let report: SunsetReport
     let heading: Double?
+    let forecastFailed: Bool
+
+    private var timeline: SunsetTimeline { report.timeline }
 
     var body: some View {
-        if let timeline = SunCalculator.timeline(on: .now, latitude: coordinate.latitude, longitude: coordinate.longitude) {
-            VStack(spacing: 28) {
-                VStack(spacing: 4) {
-                    Text("Sunset")
-                        .font(.headline)
-                        .opacity(0.8)
-                    Text(timeline.sunset, style: .time)
-                        .font(.system(size: 64, weight: .semibold, design: .rounded))
+        VStack(spacing: 28) {
+            VStack(spacing: 8) {
+                Text(report.verdict.headline)
+                    .font(.title2.bold())
+                if let stepOut = report.verdict.stepOutLine {
+                    Text(stepOut).opacity(0.9)
                 }
-
-                SunCompass(sunsetAzimuth: timeline.sunsetAzimuth, heading: heading)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    row("Golden hour starts", timeline.goldenHourStart)
-                    row("Sunset", timeline.sunset)
-                    row("Blue hour starts", timeline.blueHourStart)
-                    row("Blue hour ends", timeline.blueHourEnd)
-                    Divider().overlay(.white.opacity(0.4))
-                    row("Sunrise", timeline.sunrise)
+                if forecastFailed {
+                    Text("Couldn't load the forecast. Pull down to try again.")
+                        .font(.caption)
+                        .opacity(0.7)
                 }
-                .font(.callout)
-                .padding(20)
-                .background(.white.opacity(0.15), in: .rect(cornerRadius: 16))
-
-                Text(String(format: "%.3f, %.3f", coordinate.latitude, coordinate.longitude))
-                    .font(.caption.monospacedDigit())
-                    .opacity(0.6)
             }
-            .foregroundStyle(.white)
-            .padding(24)
-        } else {
-            Text("The sun doesn't set here today.")
-                .font(.title3.bold())
-                .foregroundStyle(.white)
+            .multilineTextAlignment(.center)
+
+            VStack(spacing: 4) {
+                Text(report.verdict.isTomorrow ? "Tomorrow's sunset" : "Sunset")
+                    .font(.headline)
+                    .opacity(0.8)
+                time(timeline.sunset)
+                    .font(.system(size: 64, weight: .semibold, design: .rounded))
+            }
+
+            SunCompass(sunsetAzimuth: timeline.sunsetAzimuth, heading: heading)
+
+            card {
+                row("Golden hour starts", timeline.goldenHourStart)
+                row("Sunset", timeline.sunset)
+                row("Blue hour starts", timeline.blueHourStart)
+                row("Blue hour ends", timeline.blueHourEnd)
+                Divider().overlay(.white.opacity(0.4))
+                row("Sunrise", timeline.sunrise)
+            }
+
+            if let c = report.conditions {
+                card {
+                    Text("Sky at sunset").font(.headline)
+                    value("High cloud", "\(c.highCloud)%")
+                    value("Mid cloud", "\(c.midCloud)%")
+                    value("Low cloud", "\(c.lowCloud)%")
+                    value("Low cloud toward sunset", c.horizonLowCloud.map { "\($0)%" } ?? "—")
+                    value("Chance of rain", "\(c.rainChance)%")
+                    value("Visibility", String(format: "%.0f km", c.visibilityKm))
+                    Divider().overlay(.white.opacity(0.4))
+                    value("Night type (debug)", report.verdict.night?.rawValue ?? "—")
+                }
+            }
         }
+        .foregroundStyle(.white)
+        .padding(24)
+    }
+
+    private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10, content: content)
+            .font(.callout)
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.white.opacity(0.15), in: .rect(cornerRadius: 16))
+    }
+
+    /// Times shown in the location's own time zone.
+    private func time(_ date: Date) -> Text {
+        Text(date.formatted(Date.FormatStyle(date: .omitted, time: .shortened, timeZone: report.timeZone)))
     }
 
     private func row(_ label: String, _ date: Date?) -> some View {
         HStack {
             Text(label)
             Spacer()
-            if let date {
-                Text(date, style: .time).monospacedDigit()
-            } else {
-                Text("—")
-            }
+            if let date { time(date).monospacedDigit() } else { Text("—") }
+        }
+    }
+
+    private func value(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value).monospacedDigit()
         }
     }
 }
