@@ -12,31 +12,59 @@ import UIKit
 import UserNotifications
 import UserNotificationsUI
 
+/// A fixed Objective-C name, so iOS finds this class from the extension's Info.plist
+/// (NSExtensionPrincipalClass) without depending on the module name.
+@objc(NotificationViewController)
 final class NotificationViewController: UIViewController, UNNotificationContentExtension {
-    private var host: UIHostingController<NotificationPreview>?
+    private let host = UIHostingController(rootView: NotificationPreview(place: nil))
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        preferredContentSize = CGSize(width: view.bounds.width, height: 240)
+
+        // Shown right away, pinned to the edges, so there's never a blank box.
+        addChild(host)
+        host.view.backgroundColor = .clear
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(host.view)
+        NSLayoutConstraint.activate([
+            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            host.view.topAnchor.constraint(equalTo: view.topAnchor),
+            host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        host.didMove(toParent: self)
+    }
 
     func didReceive(_ notification: UNNotification) {
         let info = notification.request.content.userInfo
-        guard let latitude = info["latitude"] as? Double,
-              let longitude = info["longitude"] as? Double else { return }
+        let place = NotificationPreview.Place(
+            latitude: Self.number(info["latitude"]),
+            longitude: Self.number(info["longitude"]),
+            name: (info["placeName"] as? String).flatMap { $0.isEmpty ? nil : $0 })
+        host.rootView = NotificationPreview(place: place)
+    }
 
-        let preview = NotificationPreview(latitude: latitude, longitude: longitude,
-                                          placeName: info["placeName"] as? String)
-        let host = UIHostingController(rootView: preview)
-        host.view.backgroundColor = .clear
-        addChild(host)
-        host.view.frame = view.bounds
-        host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.addSubview(host.view)
-        host.didMove(toParent: self)
-        self.host = host
+    /// userInfo numbers can arrive as Double, NSNumber or String.
+    private static func number(_ value: Any?) -> Double? {
+        switch value {
+        case let d as Double: return d
+        case let n as NSNumber: return n.doubleValue
+        case let s as String: return Double(s)
+        default: return nil
+        }
     }
 }
 
 struct NotificationPreview: View {
-    let latitude: Double
-    let longitude: Double
-    let placeName: String?
+    struct Place: Equatable {
+        let latitude: Double?
+        let longitude: Double?
+        let name: String?
+    }
+
+    /// Nil until the notification arrives.
+    let place: Place?
 
     @State private var forecast = ForecastModel()
 
@@ -45,7 +73,22 @@ struct NotificationPreview: View {
             LinearGradient(colors: [Color(red: 0.12, green: 0.14, blue: 0.32),
                                     Color(red: 0.85, green: 0.42, blue: 0.30)],
                            startPoint: .top, endPoint: .bottom)
+            content
+        }
+        .foregroundStyle(.white)
+        .task(id: place) {
+            guard let latitude = place?.latitude, let longitude = place?.longitude else { return }
+            await forecast.load(latitude: latitude, longitude: longitude)
+        }
+    }
 
+    @ViewBuilder
+    private var content: some View {
+        if let place, place.latitude == nil || place.longitude == nil {
+            Text("Couldn't read this notification's location. Open the app to see tonight's sunset.")
+                .multilineTextAlignment(.center)
+                .padding(20)
+        } else {
             switch forecast.state {
             case .idle, .loading:
                 ProgressView("Checking tonight's sky…")
@@ -56,8 +99,6 @@ struct NotificationPreview: View {
                 details(report, forecastFailed: forecastFailed)
             }
         }
-        .foregroundStyle(.white)
-        .task { await forecast.load(latitude: latitude, longitude: longitude) }
     }
 
     private func details(_ report: SunsetReport, forecastFailed: Bool) -> some View {
@@ -71,7 +112,7 @@ struct NotificationPreview: View {
             if let stepOut = report.verdict.stepOutLine {
                 Text(stepOut)
             }
-            Text("Sunset \(time) · face \(direction)" + (placeName.map { " · \($0)" } ?? ""))
+            Text("Sunset \(time) · face \(direction)" + (place?.name.map { " · \($0)" } ?? ""))
                 .font(.subheadline)
                 .opacity(0.85)
             if let c = report.conditions {
