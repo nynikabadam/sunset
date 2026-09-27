@@ -417,6 +417,12 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				ENABLE_DEBUG_DYLIB = NO;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					UserNotificationsUI,
+				);
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = YZ62Y5778W;
@@ -447,6 +453,12 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				ENABLE_DEBUG_DYLIB = NO;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					UserNotificationsUI,
+				);
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = YZ62Y5778W;
