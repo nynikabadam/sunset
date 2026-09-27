@@ -2,126 +2,259 @@
 //  ContentView.swift
 //  sunset
 //
-//  Test screen: tonight's verdict, sunset time, direction and sky conditions.
+//  Test screen: tonight's verdict, sunset time, direction and sky conditions,
+//  plus the location, notification and offline states.
 //  Placeholder layout; the real design comes from Figma.
 //
 
 import SwiftUI
 import CoreLocation
+import UserNotifications
 
 struct ContentView: View {
     @State private var location = LocationManager()
     @State private var forecast = ForecastModel()
+    @State private var settings = Settings()
+    @State private var network = NetworkMonitor()
+    @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
+    @State private var showingLocationSheet = false
+    @State private var showingSettings = false
     @Environment(\.scenePhase) private var scenePhase
 
+    /// The place the forecast is for, whichever way it was chosen.
+    private struct ActivePlace {
+        let latitude: Double
+        let longitude: Double
+        let name: String?
+        let isSample: Bool
+    }
+
+    private var activePlace: ActivePlace? {
+        switch settings.locationChoice {
+        case .sample:
+            let city = Settings.sampleCity
+            return ActivePlace(latitude: city.latitude, longitude: city.longitude, name: city.name, isSample: true)
+        case .current:
+            guard let c = location.coordinate else { return nil }
+            return ActivePlace(latitude: c.latitude, longitude: c.longitude, name: location.placeName, isSample: false)
+        case .manual(let place):
+            return ActivePlace(latitude: place.latitude, longitude: place.longitude, name: place.displayName, isSample: false)
+        }
+    }
+
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             LinearGradient(colors: [Color(red: 0.12, green: 0.14, blue: 0.32),
                                     Color(red: 0.85, green: 0.42, blue: 0.30),
                                     Color(red: 0.98, green: 0.76, blue: 0.45)],
                            startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
 
-            switch location.status {
-            case .notAsked:
-                askForLocation
-            case .denied:
-                message("Location is off", detail: "Turn it on in Settings → Privacy → Location Services to see your sunset. (Pin drop coming later.)")
-            case .locating:
-                ProgressView("Finding you…").tint(.white).foregroundStyle(.white)
-            case .located:
-                forecastView
+            content
+
+            Button { showingSettings = true } label: {
+                Image(systemName: "gearshape.fill").font(.title3).padding(20)
             }
+            .foregroundStyle(.white)
+            .accessibilityLabel("Settings")
         }
-        // Reload when the location arrives, and whenever the app comes back to the foreground.
-        .task(id: coordinateKey) { await refresh() }
+        .sheet(isPresented: $showingLocationSheet) {
+            NavigationStack { LocationPicker(settings: settings, location: location) }
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsSheet(settings: settings, location: location, notificationStatus: notificationStatus,
+                          placeName: activePlace?.name, onSendTest: sendTestNotification)
+        }
+        .onAppear {
+            location.startHeading()
+            if settings.locationChoice == .current { location.requestLocation() }
+        }
+        // A new place starts fresh (so the old place's forecast doesn't linger), then loads.
+        .task(id: placeKey) {
+            forecast = ForecastModel()
+            await refresh()
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await refresh() } }
         }
-    }
-
-    @ViewBuilder
-    private var forecastView: some View {
-        switch forecast.state {
-        case .idle, .loading:
-            ProgressView("Checking the sky…").tint(.white).foregroundStyle(.white)
-        case .noSunset:
-            message("No sunset here", detail: "The sun doesn't set here today or tomorrow.")
-        case .loaded(let report, let forecastFailed):
-            ScrollView {
-                SunsetDetails(report: report, placeName: location.placeName,
-                              heading: location.heading, forecastFailed: forecastFailed)
-            }
-            .refreshable { await refresh() }
+        .onChange(of: network.isOnline) { _, online in
+            if online { Task { await refresh() } }
+        }
+        .onChange(of: settings.notificationsOn) { _, _ in
+            Task { await refresh() }
         }
     }
 
-    private var coordinateKey: String {
-        guard let c = location.coordinate else { return "none" }
-        return String(format: "%.3f,%.3f", c.latitude, c.longitude)
+    // MARK: Screens
+
+    @ViewBuilder
+    private var content: some View {
+        if activePlace == nil {
+            // Chose current location, but there's no fix yet.
+            if location.isDenied {
+                message("Location is off",
+                        detail: "Turn it on in Settings → Privacy → Location Services, or pick a place by hand.",
+                        button: "Pick a place") { showingLocationSheet = true }
+            } else {
+                ProgressView("Finding you…").tint(.white).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else {
+            switch forecast.state {
+            case .idle, .loading:
+                ProgressView("Checking the sky…").tint(.white).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .noSunset:
+                message("No sunset here", detail: "The sun doesn't set here today or tomorrow.",
+                        button: "Change location") { showingLocationSheet = true }
+            case .loaded(let report, let forecastFailed):
+                ScrollView {
+                    VStack(spacing: 20) {
+                        header(report)
+                        if showNotificationCard { notificationCard }
+                        SunsetDetails(report: report, heading: location.heading,
+                                      forecastFailed: forecastFailed, isOffline: !network.isOnline)
+                    }
+                    .padding(.top, 8)
+                }
+                .refreshable { await refresh() }
+            }
+        }
     }
 
-    private func refresh() async {
-        guard let c = location.coordinate else { return }
-        await forecast.load(latitude: c.latitude, longitude: c.longitude)
+    /// "Sat, Sep 27 · Chicago, IL" — tap to change location.
+    private func header(_ report: SunsetReport) -> some View {
+        let date = report.timeline.sunset.formatted(
+            Date.FormatStyle(timeZone: report.timeZone).weekday(.abbreviated).month(.abbreviated).day())
+        let isSample = activePlace?.isSample ?? false
+
+        return Button { showingLocationSheet = true } label: {
+            VStack(spacing: 4) {
+                HStack(spacing: 4) {
+                    Text([date, activePlace?.name ?? "Finding city…"].joined(separator: " · "))
+                    Image(systemName: "chevron.down").font(.caption2)
+                }
+                .font(.subheadline.weight(.medium))
+                if isSample {
+                    Text("Sample city · tap to use yours")
+                        .font(.caption)
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .background(.white.opacity(0.2), in: .capsule)
+                }
+            }
+        }
+        .foregroundStyle(.white.opacity(0.9))
+        .padding(.horizontal, 60) // clear of the settings button
     }
 
-    private var askForLocation: some View {
-        VStack(spacing: 16) {
-            Text("When's the sunset?")
-                .font(.largeTitle.bold())
-            Text("Sunset app uses your location to work out when the sun sets and which way to look.")
-                .multilineTextAlignment(.center)
-                .opacity(0.85)
-            Button("Use my location") { location.requestLocation() }
+    private var showNotificationCard: Bool {
+        !(activePlace?.isSample ?? true) && !settings.notificationCardAnswered && notificationStatus == .notDetermined
+    }
+
+    private var notificationCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Want a heads-up?").font(.headline)
+            Text("A notification \(Settings.notifyMinutesBefore) minutes before sunset, every evening. Press and hold it to see the sky.")
+                .font(.callout)
+            HStack {
+                Button("Turn on") {
+                    Task {
+                        settings.notificationsOn = await NotificationScheduler.requestPermission()
+                        settings.notificationCardAnswered = true
+                        notificationStatus = await NotificationScheduler.authorizationStatus()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.white.opacity(0.3))
+                Button("Not now") { settings.notificationCardAnswered = true }
+                    .opacity(0.8)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.2), in: .rect(cornerRadius: 16))
+        .padding(.horizontal, 24)
+    }
+
+    private func message(_ title: String, detail: String, button: String, action: @escaping () -> Void) -> some View {
+        VStack(spacing: 12) {
+            Text(title).font(.title2.bold())
+            Text(detail).multilineTextAlignment(.center).opacity(0.85)
+            Button(button, action: action)
                 .buttonStyle(.borderedProminent)
                 .tint(.white.opacity(0.25))
         }
         .foregroundStyle(.white)
         .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func message(_ title: String, detail: String) -> some View {
-        VStack(spacing: 12) {
-            Text(title).font(.title2.bold())
-            Text(detail).multilineTextAlignment(.center).opacity(0.85)
+    // MARK: Loading and notifications
+
+    private var placeKey: String {
+        guard let p = activePlace else { return "none" }
+        return String(format: "%.3f,%.3f", p.latitude, p.longitude)
+    }
+
+    private func refresh() async {
+        notificationStatus = await NotificationScheduler.authorizationStatus()
+        guard let place = activePlace else { return }
+        await forecast.load(latitude: place.latitude, longitude: place.longitude)
+
+        // Keep the week of notifications in step with the place and the season.
+        let authorized = [.authorized, .provisional].contains(notificationStatus)
+        if settings.notificationsOn && authorized && !place.isSample, case .loaded(let report, _) = forecast.state {
+            await NotificationScheduler.reschedule(latitude: place.latitude, longitude: place.longitude,
+                                                   placeName: place.name, timeZone: report.timeZone,
+                                                   minutesBefore: Settings.notifyMinutesBefore)
+        } else {
+            await NotificationScheduler.cancelAll()
         }
-        .foregroundStyle(.white)
-        .padding(32)
+    }
+
+    private func sendTestNotification() {
+        guard let place = activePlace else { return }
+        let timeZone: TimeZone
+        if case .loaded(let report, _) = forecast.state { timeZone = report.timeZone } else { timeZone = .current }
+        Task {
+            if notificationStatus == .notDetermined {
+                _ = await NotificationScheduler.requestPermission()
+                notificationStatus = await NotificationScheduler.authorizationStatus()
+            }
+            await NotificationScheduler.sendTest(latitude: place.latitude, longitude: place.longitude,
+                                                 placeName: place.name, timeZone: timeZone)
+        }
     }
 }
 
+// MARK: - Main screen content
+
 private struct SunsetDetails: View {
     let report: SunsetReport
-    let placeName: String?
     let heading: Double?
     let forecastFailed: Bool
+    let isOffline: Bool
 
     private var timeline: SunsetTimeline { report.timeline }
 
-    /// "Sat, Sep 27 · Chicago, IL": which day and place the forecast is for.
-    private var dateAndPlace: String {
-        let date = timeline.sunset.formatted(
-            Date.FormatStyle(timeZone: report.timeZone).weekday(.abbreviated).month(.abbreviated).day())
-        return [date, placeName ?? "Finding city…"].joined(separator: " · ")
-    }
-
     var body: some View {
         VStack(spacing: 28) {
-            Text(dateAndPlace)
-                .font(.subheadline.weight(.medium))
-                .opacity(0.8)
-
             VStack(spacing: 8) {
-                Text(report.verdict.headline)
-                    .font(.title2.bold())
-                if let stepOut = report.verdict.stepOutLine {
-                    Text(stepOut).opacity(0.9)
-                }
-                if forecastFailed {
-                    Text("Couldn't load the forecast. Pull down to try again.")
-                        .font(.caption)
-                        .opacity(0.7)
+                if forecastFailed && isOffline {
+                    Text(VerdictCopy.offline(sunsetTime: timeString(timeline.sunset)))
+                        .font(.title2.bold())
+                } else {
+                    Text(report.verdict.headline)
+                        .font(.title2.bold())
+                    if let stepOut = report.verdict.stepOutLine {
+                        Text(stepOut).opacity(0.9)
+                    }
+                    if forecastFailed {
+                        Text("Couldn't load the forecast. Pull down to try again.")
+                            .font(.caption)
+                            .opacity(0.7)
+                    }
                 }
             }
             .multilineTextAlignment(.center)
@@ -130,7 +263,7 @@ private struct SunsetDetails: View {
                 Text(report.verdict.isTomorrow ? "Tomorrow's sunset" : "Sunset")
                     .font(.headline)
                     .opacity(0.8)
-                time(timeline.sunset)
+                Text(timeString(timeline.sunset))
                     .font(.system(size: 64, weight: .semibold, design: .rounded))
             }
 
@@ -158,6 +291,11 @@ private struct SunsetDetails: View {
                     value("Night type (debug)", report.verdict.night?.rawValue ?? "—")
                 }
             }
+
+            card {
+                Text("Did you know?").font(.headline)
+                Text(FunFacts.fact(for: timeline.sunset))
+            }
         }
         .foregroundStyle(.white)
         .padding(24)
@@ -172,15 +310,15 @@ private struct SunsetDetails: View {
     }
 
     /// Times shown in the location's own time zone.
-    private func time(_ date: Date) -> Text {
-        Text(date.formatted(Date.FormatStyle(date: .omitted, time: .shortened, timeZone: report.timeZone)))
+    private func timeString(_ date: Date) -> String {
+        date.formatted(Date.FormatStyle(date: .omitted, time: .shortened, timeZone: report.timeZone))
     }
 
     private func row(_ label: String, _ date: Date?) -> some View {
         HStack {
             Text(label)
             Spacer()
-            if let date { time(date).monospacedDigit() } else { Text("—") }
+            Text(date.map(timeString) ?? "—").monospacedDigit()
         }
     }
 

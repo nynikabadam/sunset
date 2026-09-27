@@ -49,6 +49,11 @@ enum VerdictCopy {
         "Step out around \(time) for about \(minutes) minutes."
     }
 
+    /// The offline screen. Sunset times still work offline, since they're calculated on the phone.
+    static func offline(sunsetTime: String) -> String {
+        "No signal, no forecast. The sun's still setting at \(sunsetTime), though."
+    }
+
     /// Shown when there's no forecast (offline or the fetch failed).
     static func noForecast(sunsetTime: String, tomorrow: Bool) -> String {
         tomorrow ? "Tomorrow's sunset is at \(sunsetTime)." : "Sunset's at \(sunsetTime) tonight."

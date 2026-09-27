@@ -2,8 +2,8 @@
 //  LocationManager.swift
 //  sunset
 //
-//  Wraps Core Location: asks for permission when the user taps,
-//  gets one location fix, and streams the compass heading.
+//  Wraps Core Location: asks for permission only when the user picks "current location",
+//  gets a location fix, and streams the compass heading (which works for any chosen place).
 //
 
 import CoreLocation
@@ -22,43 +22,44 @@ final class LocationManager: NSObject, CLLocationManagerDelegate {
     /// Which way the top of the phone points, degrees from true north. Nil when there's no compass (e.g. the Simulator).
     private(set) var heading: Double?
 
+    var isDenied: Bool {
+        [.denied, .restricted].contains(manager.authorizationStatus)
+    }
+
     private let manager = CLLocationManager()
+    /// True once the user has chosen "current location"; until then, no location is used.
+    private var wantsLocation = false
 
     override init() {
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyKilometer // city-level is plenty for sunset times
-        updateStatus(manager.authorizationStatus)
     }
 
-    /// Call from a button tap, so the permission prompt appears when the value is obvious.
+    /// Call when the user picks "current location" (or on launch if they already have).
+    /// Shows the permission prompt the first time.
     func requestLocation() {
+        wantsLocation = true
         switch manager.authorizationStatus {
         case .notDetermined:
             manager.requestWhenInUseAuthorization()
         case .authorizedWhenInUse, .authorizedAlways:
-            start()
+            status = coordinate == nil ? .locating : status
+            manager.requestLocation()
         default:
             status = .denied
         }
     }
 
-    private func start() {
-        status = .locating
-        manager.requestLocation()
+    /// Stop following the phone's location (the user picked a place by hand).
+    func stopUsingLocation() {
+        wantsLocation = false
+    }
+
+    /// The compass. Works without location permission (it falls back to magnetic north).
+    func startHeading() {
         if CLLocationManager.headingAvailable() {
             manager.startUpdatingHeading()
-        }
-    }
-
-    private func updateStatus(_ authorization: CLAuthorizationStatus) {
-        switch authorization {
-        case .authorizedWhenInUse, .authorizedAlways:
-            if coordinate == nil { start() }
-        case .denied, .restricted:
-            status = .denied
-        default:
-            status = .notAsked
         }
     }
 
@@ -67,7 +68,16 @@ final class LocationManager: NSObject, CLLocationManagerDelegate {
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let authorization = manager.authorizationStatus
-        MainActor.assumeIsolated { updateStatus(authorization) }
+        MainActor.assumeIsolated {
+            switch authorization {
+            case .authorizedWhenInUse, .authorizedAlways:
+                if wantsLocation { requestLocation() }
+            case .denied, .restricted:
+                status = .denied
+            default:
+                status = .notAsked
+            }
+        }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -82,10 +92,7 @@ final class LocationManager: NSObject, CLLocationManagerDelegate {
     private func lookUpPlaceName(for coordinate: CLLocationCoordinate2D) async {
         let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
         guard let place = try? await CLGeocoder().reverseGeocodeLocation(location).first else { return }
-        // "Chicago, IL" in the US; "London, United Kingdom" elsewhere.
-        let city = place.locality ?? place.subAdministrativeArea
-        let region = place.isoCountryCode == "US" ? place.administrativeArea : place.country
-        placeName = [city, region].compactMap { $0 }.joined(separator: ", ")
+        placeName = PlaceSearch.name(for: place)
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
